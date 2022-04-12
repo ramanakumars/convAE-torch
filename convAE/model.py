@@ -88,7 +88,7 @@ class Decoder(nn.Module):
 
         self.layers.append(nn.UpsamplingBilinear2d(scale_factor=2))
         self.layers.append(nn.ConvTranspose2d(filt, 3, 2, 1, padding=0))
-        self.layers.append(nn.ReLU())
+        self.layers.append(nn.Sigmoid())
 
         self.layers = nn.ModuleList(self.layers)
     
@@ -115,6 +115,8 @@ class BaseVAE(nn.Module):
 
         self.encoder = Encoder(conv_filt, hidden, input_channels)
         self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1])
+
+        self.type = 'VAE'
 
     def encode(self, x):
         enc = self.encoder(x)

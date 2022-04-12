@@ -2,11 +2,10 @@ import numpy as np
 import netCDF4 as nc
 
 class DataGenerator():
-    def __init__(self, nc_file, batch_size, indices=None, shuffle=True):
+    def __init__(self, nc_file, batch_size, indices=None):
         self.nc_file = nc_file
 
         self.batch_size = batch_size
-        self.shuffle    = shuffle
 
         if indices is not None:
             self.indices = indices
@@ -32,6 +31,42 @@ class DataGenerator():
         imgs[np.isnan(imgs)] = 0.
 
         return np.transpose(imgs, (0,3,1,2))
+
+    def get_meta(self, key, index=None):
+        if index is not None:
+            batch_indices = self.indices[index*self.batch_size:(index+1)*self.batch_size]
+        else:
+            batch_indices = self.indices
+
+        with nc.Dataset(self.nc_file, 'r') as dset:
+            var = dset.variables[key][batch_indices]
+
+        return var
+
+
+
+class NumpyGenerator(DataGenerator):
+    def __init__(self, data, batch_size, indices=None):
+        self.data  = data
+        self.ndata = len(data)
+
+        self.batch_size = batch_size
+
+        if indices is not None:
+            self.indices = indices
+        else:
+            self.indices = np.arange(self.ndata)
+
+    def __getitem__(self, index):
+        if index >= self.__len__():
+            raise StopIteration
+
+        batch_indices = self.indices[index*self.batch_size:(index+1)*self.batch_size]
+
+        imgs = self.data[batch_indices,:,:,:]
+
+        return imgs
+
 
 def create_generators(nc_file, batch_size, val_split=0.1):
     with nc.Dataset(nc_file, 'r') as dset:
