@@ -43,8 +43,6 @@ class DataGenerator():
 
         return var
 
-
-
 class NumpyGenerator(DataGenerator):
     def __init__(self, data, batch_size, indices=None):
         self.data  = data

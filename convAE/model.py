@@ -99,6 +99,28 @@ class Decoder(nn.Module):
         x = torchvision.transforms.functional.crop(x, top=7, left=7, height=384, width=384)
         return x
 
+class DEC(nn.Module):
+    def __init__(self, latent_dim, n_centroid, npixels, alpha=1.0, **kwargs):
+        super(DEC, self).__init__()
+
+        self.n_centroid = n_centroid
+        self.n_centroid = n_centroid
+        self.latent_dim = latent_dim
+        self.npixels    = npixels
+        self.alpha      = 1.0
+
+        self.cluster_centers = nn.Parameter(torch.zeros((self.npixels, self.latent_dim, self.n_centroid)))
+
+    def forward(self, z):
+        z = torch.transpose(x, 1, 2)
+        z = torch.reshape(x, (self.npixels, self.latent_dim, self.n_centroid))
+
+        q = 1./(1. + torch.sum( torch.square(z - self.cluster_centers), axis=3) / self.alpha)
+        q = q**((self.alpha+1.)/2.)
+        q = q / torch.sum(q, axis=(1,2), keepdim=True)
+
+        return q
+
 
 class BaseVAE(nn.Module):
     def __init__(self, conv_filt, hidden, input_channels=3):
@@ -116,7 +138,7 @@ class BaseVAE(nn.Module):
         self.encoder = Encoder(conv_filt, hidden, input_channels)
         self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1])
 
-        self.type = 'VAE'
+        self.type = ['VAE']
 
     def encode(self, x):
         enc = self.encoder(x)
@@ -138,4 +160,75 @@ class BaseVAE(nn.Module):
         out = self.decode(self.encode(x)[2])
 
         return out
+
+class BaseAE(nn.Module):
+    def __init__(self, conv_filt, hidden, input_channels=3):
+        super(BaseVAE, self).__init__()
+
+        self.conv_filt = conv_filt
+        self.hidden    = hidden
+        
+        self.flat_z   = nn.Flatten()
+
+        self.encoder = Encoder(conv_filt, hidden, input_channels)
+        self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1])
+
+        self.type = ['AE']
+
+    def encode(self, x):
+        enc = self.encoder(x)
+        
+        z   = self.flat_z(enc)
+
+        return z
+
+    def decode(self, z):
+        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 5, 5))
+
+        dec = self.decoder(dec_inp)
+
+        return dec
+
+    def forward(self, x):
+        out = self.decode(self.encode(x))
+
+        return out
+
+class DECAE(nn.Module):
+    def __init__(self, conv_filt, hidden, n_centroid=10, input_channels=3):
+        super(BaseVAE, self).__init__()
+
+        self.conv_filt  = conv_filt
+        self.hidden     = hidden
+        self.n_centroid = n_centroid
+        
+        self.flat_z   = nn.Flatten()
+
+        self.encoder = Encoder(conv_filt, hidden, input_channels)
+        self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1])
+        self.DEC     = DEC(self.hidden[-1], n_centroid, 25)
+
+        self.type = ['DEC','AE']
+
+    def encode(self, x):
+        enc = self.encoder(x)
+        
+        z   = self.flat_z(enc)
+
+        return z
+
+    def decode(self, z):
+        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 5, 5))
+
+        dec = self.decoder(dec_inp)
+
+        return dec
+
+
+    def forward(self, x):
+        z   = self.encode(x)
+        out = self.decode(z)
+        q   = self.DEC(z)
+
+        return out, q
 
