@@ -14,15 +14,14 @@ def sample(mu, log_var):
     return mu + eps*std
 
 class Encoder(nn.Module):
-    def __init__(self, conv_filt, hidden, input_channels=3):
+    def __init__(self, conv_filt, hidden, input_channels=3, conv_filts = [4, 128], n_downsample=4):
         super(Encoder, self).__init__()
 
         self.layers = []
         
         # create the list of convolutional filters
         # to use, so that we can just loop through later on
-        conv_filts = [4, 128]
-        for i in range(4):
+        for i in range(n_downsample):
             conv_filts.append(conv_filt)
 
         # create the convolutional layers
@@ -53,7 +52,7 @@ class Encoder(nn.Module):
         return x
 
 class Decoder(nn.Module):
-    def __init__(self, conv_filt, hidden, input_channels):
+    def __init__(self, conv_filt, hidden, input_channels, conv_filts=[4, 128], n_upsample=3):
         super(Decoder, self).__init__()
         self.layers = []
         
@@ -69,10 +68,9 @@ class Decoder(nn.Module):
         
         # create the list of convolutional filters
         # to use, so that we can just loop through later on
-        conv_filts = []
-        for i in range(3):
+        for i in range(n_upsample):
             conv_filts.append(conv_filt)
-        conv_filts.extend([128, 4])
+        conv_filts = conv_filts[::-1]
 
         # create the convolutional layers
         filt_prev = filt
@@ -99,6 +97,7 @@ class Decoder(nn.Module):
         x = torchvision.transforms.functional.crop(x, top=7, left=7, height=384, width=384)
         return x
 
+
 class DEC(nn.Module):
     def __init__(self, latent_dim, n_centroid, npixels, alpha=1.0, **kwargs):
         super(DEC, self).__init__()
@@ -109,13 +108,13 @@ class DEC(nn.Module):
         self.npixels    = npixels
         self.alpha      = 1.0
 
-        self.cluster_centers = nn.Parameter(torch.zeros((self.npixels, self.latent_dim, self.n_centroid)))
+        self.cluster_centers = nn.Parameter(torch.zeros((self.latent_dim, self.npixels, self.n_centroid)))
 
     def forward(self, z):
-        z = torch.transpose(x, 1, 2)
-        z = torch.reshape(x, (self.npixels, self.latent_dim, self.n_centroid))
+        #z = torch.transpose(z, 1, 2)
+        z = torch.reshape(z, (z.shape[0], self.latent_dim, self.npixels, 1))
 
-        q = 1./(1. + torch.sum( torch.square(z - self.cluster_centers), axis=3) / self.alpha)
+        q = 1./(1. + torch.sum( torch.square(z - self.cluster_centers), axis=3, keepdim=True) / self.alpha)
         q = q**((self.alpha+1.)/2.)
         q = q / torch.sum(q, axis=(1,2), keepdim=True)
 
@@ -163,7 +162,7 @@ class BaseVAE(nn.Module):
 
 class BaseAE(nn.Module):
     def __init__(self, conv_filt, hidden, input_channels=3):
-        super(BaseVAE, self).__init__()
+        super(BaseAE, self).__init__()
 
         self.conv_filt = conv_filt
         self.hidden    = hidden
@@ -196,7 +195,7 @@ class BaseAE(nn.Module):
 
 class DECAE(nn.Module):
     def __init__(self, conv_filt, hidden, n_centroid=10, input_channels=3):
-        super(BaseVAE, self).__init__()
+        super(DECAE, self).__init__()
 
         self.conv_filt  = conv_filt
         self.hidden     = hidden

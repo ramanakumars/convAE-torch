@@ -4,7 +4,7 @@ import os
 import glob
 
 class Trainer:
-    def __init__(self, model, train_data, test_data, kl_beta=0.1, losses=['mse', 'kl_loss'], metrics=['mse','kl_loss']):
+    def __init__(self, model, train_data, test_data, kl_beta=0.1, clust_beta=0.1, losses=['mse', 'kl_loss']):
         self.model = model
 
         self.train_data = train_data
@@ -13,10 +13,11 @@ class Trainer:
         self.train_batch_size = train_data.batch_size
         self.test_batch_size  = test_data.batch_size
 
-        self.kl_beta = kl_beta
+        self.kl_beta    = kl_beta
+        self.clust_beta = clust_beta
 
         self.losses  = losses
-        self.metrics = dict.fromkeys(metrics)
+        self.metrics = dict.fromkeys(losses)
 
         self.start   = 0
 
@@ -62,6 +63,9 @@ class Trainer:
         losses = []
 
         for batch, x in enumerate(pbar):
+            # account for value and ground truth
+            if len(x) == 2:
+                x = x[0]
             X = torch.Tensor(x).to(device)
 
             loss = self.loss(X)
@@ -74,7 +78,10 @@ class Trainer:
             metrics = ""
             losses.append([loss.item()])
             for key, metric in self.metrics.items():
-                metrics += f"{key}: {metric:5.2f} "
+                if metric < 1.e-2:
+                    metrics += f"{key}: {metric:5.2e} "
+                else:
+                    metrics += f"{key}: {metric:5.2f} "
                 losses[-1].append(metric)
 
             pbar.set_postfix_str(f'loss: {loss.item():5.2f} {metrics}')
@@ -91,6 +98,9 @@ class Trainer:
 
         with torch.no_grad():
             for x in tqdm.tqdm(self.test_data):
+                # account for value and ground truth
+                if len(x) == 2:
+                    x = x[0]
                 X = torch.Tensor(x).to(device)
 
                 test_loss += self.loss(X).cpu()
@@ -123,14 +133,16 @@ class Trainer:
         test_loss_history  = []
 
         for t in range(self.start, epochs):
-            self.train_data.shuffle();
+            if hasattr(self.train_data, 'shuffle'):
+                self.train_data.shuffle();
 
             print(f"Epoch {t+1}\n-------------------------------")
             train_loss = self.train_batch(optimizer)
             train_loss_history.append([t, *train_loss])
 
             if (t+1)%val_freq==0:
-                self.test_data.shuffle();
+                if hasattr(self.test_data, 'shuffle'):
+                    self.test_data.shuffle();
                 test_loss = self.test()
                 test_loss_history.append([t, *test_loss])
 
@@ -140,6 +152,6 @@ class Trainer:
                 print(f"Saved PyTorch Model State to {checkpoint_path}")
                 np.savez(f"{savepath}history.npz", train_loss=train_loss_history, test_loss=test_loss_history)
         
-        torch.save(model.state_dict(), f"{savepath}model.pth")
+        torch.save(self.model.state_dict(), f"{savepath}model.pth")
         print(f"Saved PyTorch Model State to {savepath}model.pth")
         np.savez(f"{savepath}history.npz", train_loss=train_loss_history, test_loss=test_loss_history)

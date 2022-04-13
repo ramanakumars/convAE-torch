@@ -32,6 +32,13 @@ class DataGenerator():
 
         return np.transpose(imgs, (0,3,1,2))
 
+    def get_from_indices(self, indices):
+        with nc.Dataset(self.nc_file, 'r') as dset:
+            imgs = dset.variables['imgs'][indices,:,:,:]
+        imgs[np.isnan(imgs)] = 0.
+
+        return imgs
+
     def get_meta(self, key, index=None):
         if index is not None:
             batch_indices = self.indices[index*self.batch_size:(index+1)*self.batch_size]

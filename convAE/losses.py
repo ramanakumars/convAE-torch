@@ -10,9 +10,9 @@ def kl_loss(mu, sig, mup, sig0=-4):
 
 def target_distribution(q):
     weight = q ** 2 / torch.sum(q, axis=0, keepdim=True)
-    return torch.tranpose(torch.tranpose(weight) / torch.sum(weight, axis=1, keepdim=True))
+    return  weight / torch.sum(weight, axis=(1,2), keepdim=True)
 
-def DEC_loss(q):
+def dec_loss(q):
     p = target_distribution(q)
 
     return torch.mean(torch.mean(torch.sum( p*(torch.log(p) - torch.log(q)), axis=3), axis=(1,2)))

@@ -76,4 +76,15 @@ class Inference:
                     recon[i*data.batch_size:(i+1)*data.batch_size] = self.model(X).cpu().numpy()[0]
 
         return recon
+    
+    def get_recon_single(self, x):
+        with torch.no_grad():
+            X = torch.Tensor(x).to(device)
+            if 'DEC' not in self.model.type:
+                recon   = self.model(X).cpu().numpy()
+            else:
+                recon,_ = self.model(X).cpu().numpy()
+
+        return recon
+
 
