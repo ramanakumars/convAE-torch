@@ -28,7 +28,7 @@ class MNISTDecoder(nn.Module):
             if j==1:
                 self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, 1, padding=0))
             else:
-                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 2, 1, padding=0))
+                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, 1, padding=0))
             self.layers.append(nn.ReLU())
             self.layers.append(nn.BatchNorm2d(filt))
             filt_prev = filt
@@ -43,7 +43,7 @@ class MNISTDecoder(nn.Module):
         # run the input through the layers
         for layer in self.layers:
             x = layer(x)
-        x = torchvision.transforms.functional.crop(x, top=7, left=7, height=28, width=28)
+        x = torchvision.transforms.functional.crop(x, top=1, left=1, height=28, width=28)
         return x
 
 class MNISTDECAE(nn.Module):
@@ -53,12 +53,13 @@ class MNISTDECAE(nn.Module):
         self.conv_filt  = conv_filt
         self.hidden     = hidden
         self.n_centroid = n_centroid
+        self.latent_dim = hidden[-1]*4
         
         self.flat_z   = nn.Flatten()
 
         self.encoder = Encoder(conv_filt, hidden, input_channels, n_downsample=2, conv_filts=[4])
-        self.decoder = MNISTDecoder(conv_filt, hidden[::-1], hidden[-1], n_upsample=2, conv_filts=[4])
-        self.DEC     = DEC(self.hidden[-1], n_centroid, 4)
+        self.decoder = MNISTDecoder(conv_filt, hidden[::-1], hidden[-1], n_upsample=1, conv_filts=[4])
+        self.DEC     = DEC(self.latent_dim, n_centroid)
 
         self.type = ['DEC','AE']
 
@@ -79,8 +80,7 @@ class MNISTDECAE(nn.Module):
 
     def forward(self, x):
         z   = self.encode(x)
-        out = self.decode(z)
         q   = self.DEC(z)
+        out = self.decode(z)
 
         return out, q
-

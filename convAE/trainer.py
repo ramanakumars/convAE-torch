@@ -31,6 +31,16 @@ class Trainer:
         self.start = int(checkpoints[-1].split('/')[-1].replace('checkpoint-','')[:-4])
         print(f"Loaded model state from {checkpoints[-1]} for epoch {self.start}")
 
+    def load_from_checkpoint(self, checkpoint_path):
+
+        assert os.path.exists(checkpoint_path), f"{checkpoint_path} not found!"
+
+        self.model.load_state_dict(torch.load(checkpoint_path))
+
+        self.start = int(checkpoint_path.split('/')[-1].replace('checkpoint-','')[:-4])
+
+        print(f"Loaded model state from {checkpoint_path} for epoch {self.start}")
+
     def loss(self, X):
         loss = torch.zeros(1).to(device)
         if 'DEC' not in self.model.type:
@@ -53,7 +63,10 @@ class Trainer:
                 self.metrics[loss_name] = lossi.item()
             loss += lossi
 
-        return loss
+        if 'DEC' not in self.model.type:
+            return loss, pred
+        else:
+            return loss, (pred, gamma)
 
     def train_batch(self, optimizer):
         size = len(self.train_data)
@@ -68,7 +81,8 @@ class Trainer:
                 x = x[0]
             X = torch.Tensor(x).to(device)
 
-            loss = self.loss(X)
+
+            loss, pred = self.loss(X)
 
             # Backpropagation
             optimizer.zero_grad()
@@ -83,6 +97,11 @@ class Trainer:
                 else:
                     metrics += f"{key}: {metric:5.2f} "
                 losses[-1].append(metric)
+
+            if 'DEC' in self.model.type:
+                gamma = pred[1]
+                metrics += f"gamma: {gamma.min():3.2e} {gamma.max():3.2e}"
+                #metrics += f"clust: {self.model.DEC.cluster_centers.min():5.2e} {self.model.DEC.cluster_centers.max():5.2e}"
 
             pbar.set_postfix_str(f'loss: {loss.item():5.2f} {metrics}')
 
@@ -103,7 +122,7 @@ class Trainer:
                     x = x[0]
                 X = torch.Tensor(x).to(device)
 
-                test_loss += self.loss(X).cpu()
+                test_loss += self.loss(X)[0].cpu()
                 for metric in self.metrics:
                     test_metrics[metric] += self.metrics[metric]
 

@@ -1,4 +1,5 @@
 from .model import *
+import torch.nn.functional as F
 
 def mse_loss(y_true, y_pred):
     mse = torch.mean(torch.sum(torch.square(y_true - y_pred), axis=(-1, -2)), axis=-1)
@@ -9,11 +10,12 @@ def kl_loss(mu, sig, mup, sig0=-4):
     return torch.mean(kl)
 
 def target_distribution(q):
-    weight = q ** 2 / torch.sum(q, axis=0, keepdim=True)
-    return  weight / torch.sum(weight, axis=(1,2), keepdim=True)
+    weight = q ** 2 / torch.sum(q, axis=0)
+    return  (weight.t() / torch.sum(weight, axis=1)).t()
 
 def dec_loss(q):
     p = target_distribution(q)
 
-    return torch.mean(torch.mean(torch.sum( p*(torch.log(p) - torch.log(q)), axis=3), axis=(1,2)))
+    return -nn.KLDivLoss(reduction='mean')(q, p)
+    #return torch.mean(torch.sum(p*(p.log() - q.log()), axis=1))
 

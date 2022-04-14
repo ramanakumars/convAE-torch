@@ -31,6 +31,9 @@ class Inference:
 
             with torch.no_grad():
                 for i, x in enumerate(tqdm.tqdm(data)):
+                    # account for value and ground truth
+                    if len(x) == 2:
+                        x = x[0]
                     X = torch.Tensor(x).to(device)
                     mui, sigi, zi = self.model.encode(X)
                     z[i*data.batch_size:(i+1)*data.batch_size]   = zi.cpu().numpy()
@@ -46,6 +49,9 @@ class Inference:
 
             with torch.no_grad():
                 for i, x in enumerate(tqdm.tqdm(data)):
+                    # account for value and ground truth
+                    if len(x) == 2:
+                        x = x[0]
                     X = torch.Tensor(x).to(device)
                     zi = self.model.encode(X)
                     z[i*data.batch_size:(i+1)*data.batch_size]   = zi.cpu().numpy()
@@ -61,21 +67,29 @@ class Inference:
             else:
                 data = data
 
-        print(len(data), self.img_shape)
         self.model.eval()
 
         recon = np.zeros((data.ndata, *self.img_shape))
-        print(recon.shape)
+
+        if 'DEC' in self.model.type:
+            gamma = np.zeros((data.ndata, self.model.n_centroid))
 
         with torch.no_grad():
-            for i, x in enumerate(data):
+            for i, x in enumerate(tqdm.tqdm(data)):
+                # account for value and ground truth
+                if len(x) == 2:
+                    x = x[0]
                 X = torch.Tensor(x).to(device)
                 if 'DEC' not in self.model.type:
                     recon[i*data.batch_size:(i+1)*data.batch_size] = self.model(X).cpu().numpy()
                 else:
-                    recon[i*data.batch_size:(i+1)*data.batch_size] = self.model(X).cpu().numpy()[0]
+                    recon[i*data.batch_size:(i+1)*data.batch_size] = self.model(X)[0].cpu().numpy()
+                    gamma[i*data.batch_size:(i+1)*data.batch_size] = self.model(X)[1].cpu().numpy()
 
-        return recon
+        if 'DEC' not in self.model.type:
+            return recon
+        else:
+            return recon, gamma
     
     def get_recon_single(self, x):
         with torch.no_grad():

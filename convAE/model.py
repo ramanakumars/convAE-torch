@@ -99,27 +99,25 @@ class Decoder(nn.Module):
 
 
 class DEC(nn.Module):
-    def __init__(self, latent_dim, n_centroid, npixels, alpha=1.0, **kwargs):
+    def __init__(self, latent_dim, n_centroid, alpha=1.0, **kwargs):
         super(DEC, self).__init__()
 
         self.n_centroid = n_centroid
         self.n_centroid = n_centroid
         self.latent_dim = latent_dim
-        self.npixels    = npixels
-        self.alpha      = 1.0
+        self.alpha      = alpha
+        self.power      = (alpha+1.)/2.
 
-        self.cluster_centers = nn.Parameter(torch.zeros((self.latent_dim, self.npixels, self.n_centroid)))
+        clust_centers = nn.init.xavier_uniform_(torch.zeros((self.n_centroid, self.latent_dim)))
+        self.cluster_centers = nn.Parameter(clust_centers, requires_grad=True)
 
     def forward(self, z):
         #z = torch.transpose(z, 1, 2)
-        z = torch.reshape(z, (z.shape[0], self.latent_dim, self.npixels, 1))
-
-        q = 1./(1. + torch.sum( torch.square(z - self.cluster_centers), axis=3, keepdim=True) / self.alpha)
-        q = q**((self.alpha+1.)/2.)
-        q = q / torch.sum(q, axis=(1,2), keepdim=True)
+        q1 = 1./(1. + torch.sum( (z.unsqueeze(1) - self.cluster_centers)**2., axis=2 ) / self.alpha)
+        q2 = q1**self.power
+        q  = q2 / torch.sum(q2, axis=(1), keepdim=True)
 
         return q
-
 
 class BaseVAE(nn.Module):
     def __init__(self, conv_filt, hidden, input_channels=3):
