@@ -14,7 +14,13 @@ def sample(mu, log_var):
     return mu + eps*std
 
 class Encoder(nn.Module):
-    def __init__(self, conv_filt, hidden, input_channels=3, conv_filts = [4, 128], n_downsample=4):
+    '''
+        Encoder module that encodes the input image into a latent vector
+        Input:  ([batch_size], n_channels, x, x) dimensional image
+        Output: ([batch_size], n_latent_dim) output vector
+        n_latent_dim is determined by number of downsampling layers and value of x
+    '''
+    def __init__(self, conv_filt, hidden, input_channels=3, conv_filts = [8, 64], n_downsample=4):
         super(Encoder, self).__init__()
 
         self.layers = []
@@ -27,8 +33,8 @@ class Encoder(nn.Module):
         # create the convolutional layers
         filt_prev = input_channels
         for filt in conv_filts:
-            self.layers.append(nn.Conv2d(in_channels=filt_prev, out_channels=filt, kernel_size=2, stride=1, padding='valid'))
-            self.layers.append(nn.ReLU())
+            self.layers.append(nn.Conv2d(in_channels=filt_prev, out_channels=filt, kernel_size=3, stride=1, padding='valid'))
+            self.layers.append(nn.Tanh())
             self.layers.append(nn.AvgPool2d(kernel_size=2, stride=2, padding=0))
             self.layers.append(nn.BatchNorm2d(filt))
             filt_prev = filt
@@ -39,7 +45,7 @@ class Encoder(nn.Module):
         # instead of a fully connected
         for i in range(nconv):
             self.layers.append(nn.Conv2d(filt, hidden[i], 1, 1, padding='valid'))
-            self.layers.append(nn.ReLU())
+            self.layers.append(nn.Tanh())
             self.layers.append(nn.BatchNorm2d(hidden[i]))
             filt = hidden[i]
 
@@ -52,7 +58,13 @@ class Encoder(nn.Module):
         return x
 
 class Decoder(nn.Module):
-    def __init__(self, conv_filt, hidden, input_channels, conv_filts=[4, 128], n_upsample=3):
+    ''' 
+        Decoder module that recreates the image based on the latent vector
+        Input:  ([batch_size], n_latent, y, y)  reshaped latent vecotr
+        Output: ([batch_size], 3, x, x) image
+        This decoder is tuned for a (n_latent, 5, 5) input image -> (3, 384, 384) output image
+    '''
+    def __init__(self, conv_filt, hidden, input_channels, conv_filts=[8, 64], n_upsample=3):
         super(Decoder, self).__init__()
         self.layers = []
         
@@ -62,7 +74,7 @@ class Decoder(nn.Module):
         nconv = len(hidden)
         for i in range(nconv):
             self.layers.append(nn.Conv2d(filt, hidden[i], 1, 1, padding='valid'))
-            self.layers.append(nn.ReLU())
+            self.layers.append(nn.Tanh())
             self.layers.append(nn.BatchNorm2d(hidden[i]))
             filt = hidden[i]
         
@@ -77,10 +89,10 @@ class Decoder(nn.Module):
         for j, filt in enumerate(conv_filts):
             self.layers.append(nn.Upsample(scale_factor=2, mode='bilinear'))
             if j==1:
-                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, 1, padding=0))
+                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 4, 1, padding=0))
             else:
-                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 2, 1, padding=0))
-            self.layers.append(nn.ReLU())
+                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, 1, padding=0))
+            self.layers.append(nn.Tanh())
             self.layers.append(nn.BatchNorm2d(filt))
             filt_prev = filt
 
@@ -94,11 +106,16 @@ class Decoder(nn.Module):
         # run the input through the layers
         for layer in self.layers:
             x = layer(x)
-        x = torchvision.transforms.functional.crop(x, top=7, left=7, height=384, width=384)
+        x = torchvision.transforms.functional.crop(x, top=6, left=6, height=384, width=384)
         return x
 
 
 class DEC(nn.Module):
+    ''' 
+        Deep-Embedding Clustering layer. Calculates the cluster probability for a given
+        input latent vector based on the Student t-distribution
+        See: https://arxiv.org/abs/1511.06335
+    '''
     def __init__(self, latent_dim, n_centroid, alpha=1.0, **kwargs):
         super(DEC, self).__init__()
 
@@ -120,6 +137,10 @@ class DEC(nn.Module):
         return q
 
 class BaseVAE(nn.Module):
+    '''
+        Simple Convolutional VAE network that joins the Encoder
+        and Decoder module from above. 
+    '''
     def __init__(self, conv_filt, hidden, input_channels=3):
         super(BaseVAE, self).__init__()
 
@@ -147,7 +168,7 @@ class BaseVAE(nn.Module):
         return mu, log_var, z
 
     def decode(self, z):
-        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 5, 5))
+        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 4, 4))
 
         dec = self.decoder(dec_inp)
 
@@ -159,6 +180,11 @@ class BaseVAE(nn.Module):
         return out
 
 class BaseAE(nn.Module):
+    '''
+        Simple Convolutional AE network that joins the Encoder
+        and Decoder module from above, without the sampling layer used
+        by the VAE
+    '''
     def __init__(self, conv_filt, hidden, input_channels=3):
         super(BaseAE, self).__init__()
 
@@ -180,7 +206,7 @@ class BaseAE(nn.Module):
         return z
 
     def decode(self, z):
-        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 5, 5))
+        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 4, 4))
 
         dec = self.decoder(dec_inp)
 
@@ -192,18 +218,22 @@ class BaseAE(nn.Module):
         return out
 
 class DECAE(nn.Module):
+    '''
+        An AE that has the DEC component applied to the latent vectors
+    '''
     def __init__(self, conv_filt, hidden, n_centroid=10, input_channels=3):
         super(DECAE, self).__init__()
 
         self.conv_filt  = conv_filt
         self.hidden     = hidden
         self.n_centroid = n_centroid
+        self.latent_dim = hidden[-1]*16
         
         self.flat_z   = nn.Flatten()
 
         self.encoder = Encoder(conv_filt, hidden, input_channels)
         self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1])
-        self.DEC     = DEC(self.hidden[-1], n_centroid, 25)
+        self.DEC     = DEC(self.hidden[-1]*16, n_centroid)
 
         self.type = ['DEC','AE']
 
@@ -215,7 +245,7 @@ class DECAE(nn.Module):
         return z
 
     def decode(self, z):
-        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 5, 5))
+        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 4, 4))
 
         dec = self.decoder(dec_inp)
 

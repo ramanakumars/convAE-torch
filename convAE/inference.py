@@ -91,6 +91,33 @@ class Inference:
         else:
             return recon, gamma
     
+    def get_gamma(self, data_sub=None, batch_size=16):
+        if data_sub is None:
+            data = self.data
+        else:
+            if not isinstance(data_sub, DataGenerator):
+                data = NumpyGenerator(data_sub, batch_size=batch_size)
+            else:
+                data = data
+
+        self.model.eval()
+        
+        if 'DEC' not in self.model.type:
+            raise ValueError('This can only be run on a DEC model')
+
+
+        gamma = np.zeros((data.ndata, self.model.n_centroid))
+
+        with torch.no_grad():
+            for i, x in enumerate(tqdm.tqdm(data)):
+                # account for value and ground truth
+                if len(x) == 2:
+                    x = x[0]
+                X = torch.Tensor(x).to(device)
+                gamma[i*data.batch_size:(i+1)*data.batch_size] = self.model(X)[1].cpu().numpy()
+
+        return gamma
+
     def get_recon_single(self, x):
         with torch.no_grad():
             X = torch.Tensor(x).to(device)

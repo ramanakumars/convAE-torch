@@ -2,7 +2,7 @@ from .model import *
 import torch.nn.functional as F
 
 def mse_loss(y_true, y_pred):
-    mse = torch.mean(torch.sum(torch.square(y_true - y_pred), axis=(-1, -2)), axis=-1)
+    mse = torch.mean(torch.sum(torch.square(y_true - y_pred), axis=(-1, -2)), axis=1)
     return torch.mean(mse)
 
 def kl_loss(mu, sig, mup, sig0=-4):
