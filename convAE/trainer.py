@@ -166,6 +166,8 @@ class Trainer:
         '''
         if optim=='Adam':
             optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        elif optim=='SGD':
+            optimizer = torch.optim.SGD(self.model.parameters(), lr=lr, momentum=0.9)
         else:
             raise ValueError(f"optimizer {optim} not implemented.")
 
@@ -182,12 +184,13 @@ class Trainer:
         test_loss_history  = []
         
         if os.path.exists(f"{savepath}history.npz"):
-            loss_hist = np.load(f"{savepath}history.npz")
+            loss_hist = np.load(f"{savepath}history.npz", allow_pickle=True)
 
             if len(loss_hist['train_loss']) >= self.start:
                 train_loss_history = loss_hist['train_loss'].tolist()[:self.start]
                 test_loss_history  = loss_hist['test_loss']
-                test_loss_history  = test_loss_history[test_lost_history[:,0]<=self.start].tolist()
+                tmask = [thist[0] <= self.start for thist in test_loss_history]
+                test_loss_history  = test_loss_history[tmask].tolist()
                 print(f"Loaded history from {savepath}history.npz")
 
         for t in range(self.start, epochs):

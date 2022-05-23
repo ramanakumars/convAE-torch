@@ -11,7 +11,7 @@ class MNISTDecoder(nn.Module):
         nconv = len(hidden)
         for i in range(nconv):
             self.layers.append(nn.Conv2d(filt, hidden[i], 1, 1, padding='valid'))
-            self.layers.append(nn.ReLU())
+            self.layers.append(nn.Tanh())
             self.layers.append(nn.BatchNorm2d(hidden[i]))
             filt = hidden[i]
         
@@ -29,7 +29,7 @@ class MNISTDecoder(nn.Module):
                 self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, 1, padding=0))
             else:
                 self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, 1, padding=0))
-            self.layers.append(nn.ReLU())
+            self.layers.append(nn.Tanh())
             self.layers.append(nn.BatchNorm2d(filt))
             filt_prev = filt
 
@@ -57,7 +57,7 @@ class MNISTDECAE(nn.Module):
         
         self.flat_z   = nn.Flatten()
 
-        self.encoder = Encoder(conv_filt, hidden, input_channels, n_downsample=2, conv_filts=[4])
+        self.encoder = Encoder(conv_filt, hidden, input_channels, n_downsample=1, conv_filts=[4])
         self.decoder = MNISTDecoder(conv_filt, hidden[::-1], hidden[-1], n_upsample=1, conv_filts=[4])
         self.DEC     = DEC(self.latent_dim, n_centroid)
 

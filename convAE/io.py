@@ -2,9 +2,10 @@ import numpy as np
 import netCDF4 as nc
 
 class DataGenerator():
-    def __init__(self, nc_file, batch_size, indices=None):
+    def __init__(self, nc_file, batch_size, indices=None, scale=1):
         self.nc_file = nc_file
 
+        self.scale      = scale
         self.batch_size = batch_size
 
         if indices is not None:
@@ -27,14 +28,13 @@ class DataGenerator():
         batch_indices = self.indices[index*self.batch_size:(index+1)*self.batch_size]
 
         with nc.Dataset(self.nc_file, 'r') as dset:
-            imgs = dset.variables['imgs'][batch_indices,:,:,:]
-        imgs[np.isnan(imgs)] = 0.
+            imgs = dset.variables['imgs'][batch_indices,:,:,:]**self.scale
 
         return np.transpose(imgs, (0,3,1,2))
 
     def get_from_indices(self, indices):
         with nc.Dataset(self.nc_file, 'r') as dset:
-            imgs = dset.variables['imgs'][indices,:,:,:]
+            imgs = dset.variables['imgs'][indices,:,:,:]**self.scale
         imgs[np.isnan(imgs)] = 0.
 
         return imgs

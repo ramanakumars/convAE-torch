@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torchvision
+from torchinfo import summary
 from .io import *
 import numpy as np
 import tqdm
@@ -13,41 +14,21 @@ def sample(mu, log_var):
     eps = torch.randn_like(std)
     return mu + eps*std
 
-class Encoder(nn.Module):
-    '''
-        Encoder module that encodes the input image into a latent vector
-        Input:  ([batch_size], n_channels, x, x) dimensional image
-        Output: ([batch_size], n_latent_dim) output vector
-        n_latent_dim is determined by number of downsampling layers and value of x
-    '''
-    def __init__(self, conv_filt, hidden, input_channels=3, conv_filts = [8, 64], n_downsample=4):
-        super(Encoder, self).__init__()
-
-        self.layers = []
-        
-        # create the list of convolutional filters
-        # to use, so that we can just loop through later on
-        for i in range(n_downsample):
-            conv_filts.append(conv_filt)
+class Downsample(nn.Module):
+    def __init__(self, conv_filt, conv_filts, input_channels):
+        super(Downsample, self).__init__()
 
         # create the convolutional layers
         filt_prev = input_channels
+        self.layers = []
         for filt in conv_filts:
-            self.layers.append(nn.Conv2d(in_channels=filt_prev, out_channels=filt, kernel_size=3, stride=1, padding='valid'))
-            self.layers.append(nn.Tanh())
-            self.layers.append(nn.AvgPool2d(kernel_size=2, stride=2, padding=0))
+            self.layers.append(nn.Conv2d(in_channels=filt_prev, out_channels=filt, kernel_size=3, stride=2, padding='valid'))
+            self.layers.append(nn.ReLU())
+            #self.layers.append(nn.MaxPool2d(kernel_size=2, stride=2, padding=0))
             self.layers.append(nn.BatchNorm2d(filt))
             filt_prev = filt
-
-        nconv = len(hidden)
-
-        # fully convolutional layers in the bottleneck 
-        # instead of a fully connected
-        for i in range(nconv):
-            self.layers.append(nn.Conv2d(filt, hidden[i], 1, 1, padding='valid'))
-            self.layers.append(nn.Tanh())
-            self.layers.append(nn.BatchNorm2d(hidden[i]))
-            filt = hidden[i]
+            
+        #self.layers.append(nn.MaxPool2d(kernel_size=2, stride=2, padding=0))
 
         self.layers = nn.ModuleList(self.layers)
     
@@ -57,12 +38,104 @@ class Encoder(nn.Module):
             x = layer(x)
         return x
 
+class Bottleneck(nn.Module):
+    def __init__(self, hidden, conv_filt):
+        super(Bottleneck, self).__init__()
+        nconv = len(hidden)
+        
+        filt = conv_filt
+
+        # fully convolutional layers in the bottleneck 
+        # instead of a fully connected
+        self.layers = []
+        for i in range(nconv):
+            self.layers.append(nn.Conv2d(filt, hidden[i], 1, 1, padding='valid'))
+            self.layers.append(nn.ReLU())
+            self.layers.append(nn.BatchNorm2d(hidden[i]))
+            filt = hidden[i]
+        self.layers = nn.ModuleList(self.layers)
+    
+    def forward(self, x):
+        # run the input through the layers
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+class BottleneckRes(nn.Module):
+    def __init__(self, hidden, conv_filt, n_rep=3):
+        super(BottleneckRes, self).__init__()
+        nconv = len(hidden)
+        
+        filt = conv_filt
+
+        self.layers = []
+
+        self.n_rep = n_rep
+
+        # fully convolutional layers in the bottleneck 
+        # instead of a fully connected
+        for i in range(nconv):
+            for j in range(self.n_rep):
+                self.layers.append(nn.Conv2d(filt, hidden[i], 1, 1, padding='valid'))
+                self.layers.append(nn.ReLU())
+                self.layers.append(nn.BatchNorm2d(hidden[i]))
+                filt = hidden[i]
+        self.layers = nn.ModuleList(self.layers)
+
+    def forward(self, x):
+        for i in range(len(self.layers)//(3*self.n_rep)):
+            out0 = self.layers[i*self.n_rep*3  ](x)    # conv2d
+            out0 = self.layers[i*self.n_rep*3+1](out0) # activation
+            out0 = self.layers[i*self.n_rep*3+2](out0) # batchnorm
+
+            for j in range(1, self.n_rep):
+                ind = (i*self.n_rep+j)*3
+                if j==1:
+                    out = self.layers[ind  ](out0) # conv2d
+                else:
+                    out = self.layers[ind  ](out) # conv2d
+                out     = self.layers[ind+1](out) # activation
+                out     = self.layers[ind+2](out) # batchnorm
+            x = torch.add(out, out0)
+
+        return x
+
+class Encoder(nn.Module):
+    '''
+        Encoder module that encodes the input image into a latent vector
+        Input:  ([batch_size], n_channels, x, x) dimensional image
+        Output: ([batch_size], n_latent_dim) output vector
+        n_latent_dim is determined by number of downsampling layers and value of x
+    '''
+    def __init__(self, conv_filt, hidden, input_channels=3, conv_filts = [8, 64], n_downsample=4, resnet=False):
+        super(Encoder, self).__init__()
+
+        self.layers = []
+        
+        # create the list of convolutional filters
+        # to use, so that we can just loop through later on
+        for i in range(n_downsample):
+            conv_filts.append(conv_filt)
+        
+        self.downsample = Downsample(conv_filt, conv_filts, input_channels)
+
+        if resnet:
+            self.bottleneck = BottleneckRes(hidden, conv_filt)
+        else:
+            self.bottleneck = Bottleneck(hidden, conv_filt)
+
+    def forward(self, x):
+        # run the input through the layers
+        x = self.downsample(x)
+        x = self.bottleneck(x)
+        return x
+
 class Decoder(nn.Module):
     ''' 
         Decoder module that recreates the image based on the latent vector
         Input:  ([batch_size], n_latent, y, y)  reshaped latent vecotr
         Output: ([batch_size], 3, x, x) image
-        This decoder is tuned for a (n_latent, 5, 5) input image -> (3, 384, 384) output image
+        This decoder is tuned for a (n_latent, 5, 5) input image -> (5, 584, 384) output image
     '''
     def __init__(self, conv_filt, hidden, input_channels, conv_filts=[8, 64], n_upsample=3):
         super(Decoder, self).__init__()
@@ -74,8 +147,8 @@ class Decoder(nn.Module):
         nconv = len(hidden)
         for i in range(nconv):
             self.layers.append(nn.Conv2d(filt, hidden[i], 1, 1, padding='valid'))
-            self.layers.append(nn.Tanh())
-            self.layers.append(nn.BatchNorm2d(hidden[i]))
+            self.layers.append(nn.ReLU())
+            #self.layers.append(nn.BatchNorm2d(hidden[i]))
             filt = hidden[i]
         
         # create the list of convolutional filters
@@ -84,20 +157,22 @@ class Decoder(nn.Module):
             conv_filts.append(conv_filt)
         conv_filts = conv_filts[::-1]
 
+        #self.layers.append(nn.Upsample(scale_factor=2, mode='bilinear'))
+
         # create the convolutional layers
         filt_prev = filt
         for j, filt in enumerate(conv_filts):
-            self.layers.append(nn.Upsample(scale_factor=2, mode='bilinear'))
-            if j==1:
-                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 4, 1, padding=0))
+            #self.layers.append(nn.Upsample(scale_factor=2, mode='bilinear'))
+            if j==len(conv_filts)-1:
+                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 5, stride=2, padding=0))
             else:
-                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, 1, padding=0))
-            self.layers.append(nn.Tanh())
+                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, stride=2, padding=0))
+            self.layers.append(nn.ReLU())
             self.layers.append(nn.BatchNorm2d(filt))
             filt_prev = filt
 
-        self.layers.append(nn.UpsamplingBilinear2d(scale_factor=2))
-        self.layers.append(nn.ConvTranspose2d(filt, 3, 2, 1, padding=0))
+        #self.layers.append(nn.UpsamplingBilinear2d(scale_factor=2))
+        self.layers.append(nn.ConvTranspose2d(filt, 3, 3, stride=2, padding=0, dilation=2))
         self.layers.append(nn.Sigmoid())
 
         self.layers = nn.ModuleList(self.layers)
@@ -106,9 +181,62 @@ class Decoder(nn.Module):
         # run the input through the layers
         for layer in self.layers:
             x = layer(x)
-        x = torchvision.transforms.functional.crop(x, top=6, left=6, height=384, width=384)
+        x = torchvision.transforms.functional.crop(x, top=4, left=4, height=384, width=384)
         return x
 
+class DecoderUpSample(nn.Module):
+    ''' 
+        Decoder module that recreates the image based on the latent vector
+        Input:  ([batch_size], n_latent, y, y)  reshaped latent vecotr
+        Output: ([batch_size], 3, x, x) image
+        This decoder is tuned for a (n_latent, 5, 5) input image -> (5, 584, 384) output image
+    '''
+    def __init__(self, conv_filt, hidden, input_channels, conv_filts=[8, 64], n_upsample=3):
+        super(DecoderUpSample, self).__init__()
+        self.layers = []
+        
+        filt = input_channels
+        # fully convolutional layers in the bottleneck 
+        # instead of a fully connected
+        nconv = len(hidden)
+        for i in range(nconv):
+            self.layers.append(nn.Conv2d(filt, hidden[i], 1, 1, padding='valid'))
+            self.layers.append(nn.ReLU())
+            #self.layers.append(nn.BatchNorm2d(hidden[i]))
+            filt = hidden[i]
+        
+        # create the list of convolutional filters
+        # to use, so that we can just loop through later on
+        for i in range(n_upsample):
+            conv_filts.append(conv_filt)
+        conv_filts = conv_filts[::-1]
+
+        self.layers.append(nn.Upsample(scale_factor=2, mode='bilinear'))
+
+        # create the convolutional layers
+        filt_prev = filt
+        for j, filt in enumerate(conv_filts):
+            self.layers.append(nn.Upsample(scale_factor=2, mode='bilinear'))
+            if j==1:
+                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 5, padding=0))
+            else:
+                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, padding=0))
+            self.layers.append(nn.ReLU())
+            self.layers.append(nn.BatchNorm2d(filt))
+            filt_prev = filt
+
+        #self.layers.append(nn.UpsamplingBilinear2d(scale_factor=2))
+        self.layers.append(nn.ConvTranspose2d(filt, 3, 3, padding=0))
+        self.layers.append(nn.Sigmoid())
+
+        self.layers = nn.ModuleList(self.layers)
+    
+    def forward(self, x):
+        # run the input through the layers
+        for layer in self.layers:
+            x = layer(x)
+        x = torchvision.transforms.functional.crop(x, top=8, left=8, height=384, width=384)
+        return x
 
 class DEC(nn.Module):
     ''' 
@@ -125,14 +253,14 @@ class DEC(nn.Module):
         self.alpha      = alpha
         self.power      = (alpha+1.)/2.
 
-        clust_centers = nn.init.xavier_uniform_(torch.zeros((self.n_centroid, self.latent_dim)))
+        clust_centers = nn.init.xavier_uniform_(torch.zeros(self.n_centroid, self.latent_dim, dtype=torch.float))
         self.cluster_centers = nn.Parameter(clust_centers, requires_grad=True)
 
     def forward(self, z):
         #z = torch.transpose(z, 1, 2)
-        q1 = 1./(1. + torch.sum( (z.unsqueeze(1) - self.cluster_centers)**2., axis=2 ) / self.alpha)
+        q1 = 1./(1. + torch.sum( (z.unsqueeze(1) - self.cluster_centers)**2., 2 ) / self.alpha)
         q2 = q1**self.power
-        q  = q2 / torch.sum(q2, axis=(1), keepdim=True)
+        q  = q2 / torch.sum(q2, dim=1, keepdim=True)
 
         return q
 
@@ -141,7 +269,7 @@ class BaseVAE(nn.Module):
         Simple Convolutional VAE network that joins the Encoder
         and Decoder module from above. 
     '''
-    def __init__(self, conv_filt, hidden, input_channels=3):
+    def __init__(self, conv_filt, hidden, input_channels=3, resnet=False):
         super(BaseVAE, self).__init__()
 
         self.conv_filt = conv_filt
@@ -153,8 +281,8 @@ class BaseVAE(nn.Module):
         self.flat_mu    = nn.Flatten()
         self.flat_sig   = nn.Flatten()
 
-        self.encoder = Encoder(conv_filt, hidden, input_channels)
-        self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1])
+        self.encoder = Encoder(conv_filt, hidden, input_channels, resnet=resnet, n_downsample=3)
+        self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1], n_upsample=2)
 
         self.type = ['VAE']
 
@@ -168,7 +296,7 @@ class BaseVAE(nn.Module):
         return mu, log_var, z
 
     def decode(self, z):
-        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 4, 4))
+        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 5, 5))
 
         dec = self.decoder(dec_inp)
 
@@ -185,16 +313,21 @@ class BaseAE(nn.Module):
         and Decoder module from above, without the sampling layer used
         by the VAE
     '''
-    def __init__(self, conv_filt, hidden, input_channels=3):
+    def __init__(self, conv_filt, hidden, input_channels=3, resnet=False, upsample=True):
         super(BaseAE, self).__init__()
 
-        self.conv_filt = conv_filt
-        self.hidden    = hidden
+        self.conv_filt  = conv_filt
+        self.hidden     = hidden
+        self.latent_dim = hidden[-1]*25
         
         self.flat_z   = nn.Flatten()
 
-        self.encoder = Encoder(conv_filt, hidden, input_channels)
-        self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1])
+        self.encoder = Encoder(conv_filt, hidden, input_channels, resnet=resnet, n_downsample=4)
+        if upsample:
+            self.decoder = DecoderUpSample(conv_filt, hidden[::-1], hidden[-1], n_upsample=3)
+        else:
+            self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1], n_upsample=3)
+
 
         self.type = ['AE']
 
@@ -206,7 +339,7 @@ class BaseAE(nn.Module):
         return z
 
     def decode(self, z):
-        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 4, 4))
+        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 5, 5))
 
         dec = self.decoder(dec_inp)
 
@@ -227,13 +360,13 @@ class DECAE(nn.Module):
         self.conv_filt  = conv_filt
         self.hidden     = hidden
         self.n_centroid = n_centroid
-        self.latent_dim = hidden[-1]*16
+        self.latent_dim = hidden[-1]*25
         
         self.flat_z   = nn.Flatten()
 
-        self.encoder = Encoder(conv_filt, hidden, input_channels)
-        self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1])
-        self.DEC     = DEC(self.hidden[-1]*16, n_centroid)
+        self.encoder = Encoder(conv_filt, hidden, input_channels, n_downsample=3)
+        self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1], n_upsample=4)
+        self.DEC     = DEC(self.latent_dim, n_centroid)
 
         self.type = ['DEC','AE']
 
@@ -245,7 +378,7 @@ class DECAE(nn.Module):
         return z
 
     def decode(self, z):
-        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 4, 4))
+        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 5, 5))
 
         dec = self.decoder(dec_inp)
 
