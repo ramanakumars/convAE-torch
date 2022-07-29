@@ -22,9 +22,10 @@ class Downsample(nn.Module):
         filt_prev = input_channels
         self.layers = []
         for filt in conv_filts:
-            self.layers.append(nn.Conv2d(in_channels=filt_prev, out_channels=filt, kernel_size=3, stride=2, padding='valid'))
+            self.layers.append(nn.Conv2d(in_channels=filt_prev, out_channels=filt, kernel_size=3,
+                                         stride=1, padding='valid'))
             self.layers.append(nn.ReLU())
-            #self.layers.append(nn.MaxPool2d(kernel_size=2, stride=2, padding=0))
+            self.layers.append(nn.MaxPool2d(kernel_size=2, stride=2, padding=0))
             self.layers.append(nn.BatchNorm2d(filt))
             filt_prev = filt
             
@@ -211,21 +212,21 @@ class DecoderUpSample(nn.Module):
             conv_filts.append(conv_filt)
         conv_filts = conv_filts[::-1]
 
-        self.layers.append(nn.Upsample(scale_factor=2, mode='bilinear'))
+        #self.layers.append(nn.Upsample(scale_factor=2, mode='bilinear'))
 
         # create the convolutional layers
         filt_prev = filt
         for j, filt in enumerate(conv_filts):
             self.layers.append(nn.Upsample(scale_factor=2, mode='bilinear'))
             if j==1:
-                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 5, padding=0))
+                self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, padding=1))
             else:
                 self.layers.append(nn.ConvTranspose2d(filt_prev, filt, 3, padding=0))
             self.layers.append(nn.ReLU())
             self.layers.append(nn.BatchNorm2d(filt))
             filt_prev = filt
 
-        #self.layers.append(nn.UpsamplingBilinear2d(scale_factor=2))
+        self.layers.append(nn.UpsamplingBilinear2d(scale_factor=2))
         self.layers.append(nn.ConvTranspose2d(filt, 3, 3, padding=0))
         self.layers.append(nn.Sigmoid())
 
@@ -235,7 +236,7 @@ class DecoderUpSample(nn.Module):
         # run the input through the layers
         for layer in self.layers:
             x = layer(x)
-        x = torchvision.transforms.functional.crop(x, top=8, left=8, height=384, width=384)
+        x = torchvision.transforms.functional.crop(x, top=15, left=15, height=384, width=384)
         return x
 
 class DEC(nn.Module):
@@ -281,8 +282,8 @@ class BaseVAE(nn.Module):
         self.flat_mu    = nn.Flatten()
         self.flat_sig   = nn.Flatten()
 
-        self.encoder = Encoder(conv_filt, hidden, input_channels, resnet=resnet, n_downsample=3)
-        self.decoder = Decoder(conv_filt, hidden[::-1], hidden[-1], n_upsample=2)
+        self.encoder = Encoder(conv_filt, hidden, input_channels, resnet=resnet, n_downsample=4)
+        self.decoder = DecoderUpSample(conv_filt, hidden[::-1], hidden[-1], n_upsample=3)
 
         self.type = ['VAE']
 
@@ -339,7 +340,7 @@ class BaseAE(nn.Module):
         return z
 
     def decode(self, z):
-        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 5, 5))
+        dec_inp = torch.reshape(z, (z.shape[0], self.hidden[-1], 4, 4))
 
         dec = self.decoder(dec_inp)
 
@@ -391,4 +392,37 @@ class DECAE(nn.Module):
         q   = self.DEC(z)
 
         return out, q
+
+class Discriminator(nn.Module):
+    def __init__(self):
+        super(Discriminator, self).__init__()
+
+        self.layers = []
+
+        filts = [3, 6, 8, 16, 16, 16, 16]
+
+        for i in range(6):
+            self.layers.append(nn.Conv2d(filts[i], filts[i+1], 3, stride=1, padding=0))
+            self.layers.append(nn.ReLU())
+            self.layers.append(nn.MaxPool2d(2))
+            self.layers.append(nn.BatchNorm2d(filts[i+1]))
+
+        self.layers.append(nn.Flatten())
+        self.layers.append(nn.Linear(256, 64))
+        self.layers.append(nn.ReLU())
+        self.layers.append(nn.BatchNorm1d(64))
+        self.layers.append(nn.Dropout(0.2))
+        self.layers.append(nn.Linear(64, 16))
+        self.layers.append(nn.ReLU())
+        self.layers.append(nn.BatchNorm1d(16))
+        self.layers.append(nn.Dropout(0.2))
+        self.layers.append(nn.Linear(16, 1))
+        self.layers.append(nn.Sigmoid())
+        self.layers = nn.ModuleList(self.layers)
+    
+    def forward(self, x):
+        # run the input through the layers
+        for layer in self.layers:
+            x = layer(x)
+        return x
 
