@@ -30,23 +30,22 @@ class Trainer:
 
         assert len(checkpoints) > 0, "No checkpoints found!"
 
-        self.model.load_state_dict(torch.load(checkpoints[-1]))
-
-        self.start = int(checkpoints[-1].split('/')[-1].replace('checkpoint-','')[:-4])
-        print(f"Loaded model state from {checkpoints[-1]} for epoch {self.start}")
+        self.load_from_checkpoint(checkpoints[-1])
 
     def load_from_checkpoint(self, checkpoint_path):
 
         assert os.path.exists(checkpoint_path), f"{checkpoint_path} not found!"
 
-        self.model.load_state_dict(torch.load(checkpoint_path))
+        self.model.load_state_dict(torch.load(checkpoint_path)['model'])
+        if hasattr(self, 'disc'):
+            self.disc.load_state_dict(torch.load(checkpoint_path)['discriminator'])
 
         self.start = int(checkpoint_path.split('/')[-1].replace('checkpoint-','')[:-4])
 
         print(f"Loaded model state from {checkpoint_path} for epoch {self.start}")
 
-    def loss(self, X):
-        loss = torch.zeros(1).to(device)
+    def get_loss(self, X):
+        self.loss = torch.zeros(1).to(device)
         if 'DEC' not in self.model.type:
             pred = self.model(X)
         else:
@@ -65,19 +64,49 @@ class Trainer:
                 raise ValueError(f'Loss {loss_name} not implemented')
             if loss_name in self.metrics.keys():
                 self.metrics[loss_name] = lossi.item()
-            loss += lossi
+            self.loss += lossi
+
+        if hasattr(self, 'disc'):
+            # add the binary crossentropy loss
+            # from the discriminator
+            '''
+            crops_pred = torch.empty((X.shape[0], 25, 3, 76, 76), dtype=torch.float32).to(device)
+            crops_true = torch.empty((X.shape[0], 25, 3, 76, 76), dtype=torch.float32).to(device)
+
+            # crop the images into 5 segments on each side
+            # to correspond to what the final latent space vector
+            # looks like. so we are going to test the reconstruction
+            # one segment at a time
+            for j in range(5):
+                for i in range(5):
+                    crops_pred[:,j*5+i,:,:] = pred[:,:,j*77:j*77+76,i*77:i*77+76]
+                    crops_true[:,j*5+i,:,:] = X[:,:,j*77:j*77+76,i*77:i*77+76]
+
+            crops_pred = torch.flatten(crops_pred, start_dim=0, end_dim=1)
+            crops_true = torch.flatten(crops_true, start_dim=0, end_dim=1)
+            '''
+            
+            label_pred = self.disc(self.model.decode(torch.randn((X.shape[0], 200), dtype=torch.float).to(device)))
+            label_true = self.disc(X)
+
+            disc_loss1 = nn.BCELoss()(label_pred, torch.zeros_like(label_pred))
+            disc_loss2 = nn.BCELoss()(label_true, torch.ones_like(label_true))
+            self.disc_loss = (disc_loss1 + disc_loss2)*350
+            self.metrics['disc_loss'] = self.disc_loss.item()
 
         if 'DEC' not in self.model.type:
-            return loss, pred
+            return pred
         else:
-            return loss, (pred, gamma)
+            return pred, gamma
 
-    def train_batch(self, optimizer):
+    def train_batch(self):
         '''
             Train a single epoch of the model
         '''
         size = len(self.train_data)
         self.model.train()
+        if hasattr(self, 'disc'):
+            self.disc.train()
         pbar = tqdm.tqdm(self.train_data)
 
         losses = []
@@ -89,16 +118,21 @@ class Trainer:
             X = torch.Tensor(x).to(device)
 
 
-            loss, pred = self.loss(X)
+            pred = self.get_loss(X)
 
             # Backpropagation
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            if hasattr(self, 'disc'):
+                self.optim_disc.zero_grad()
+                self.disc_loss.backward(retain_graph=True)
+                self.optim_disc.step()
+
+            self.optimizer.zero_grad()
+            self.loss.backward()
+            self.optimizer.step()
 
 
             # add the metrics to the loss history array
-            losses.append([loss.item()])
+            losses.append([self.loss.item()])
             for key, metric in self.metrics.items():
                 losses[-1].append(metric)
 
@@ -129,6 +163,9 @@ class Trainer:
         '''
         num_batches = len(self.test_data)
         self.model.eval()
+
+        if hasattr(self, 'disc'):
+            self.disc.eval()
         test_loss = 0
         test_metrics = {}
         for metric in self.metrics:
@@ -140,8 +177,10 @@ class Trainer:
                 if len(x) == 2:
                     x = x[0]
                 X = torch.Tensor(x).to(device)
+                
+                self.get_loss(X)
 
-                test_loss += self.loss(X)[0].cpu()
+                test_loss += self.loss.cpu()
                 for metric in self.metrics:
                     test_metrics[metric] += self.metrics[metric]
 
@@ -165,14 +204,17 @@ class Trainer:
             the loss from the validation sample every `val_freq` epochs.
         '''
         if optim=='Adam':
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         elif optim=='SGD':
-            optimizer = torch.optim.SGD(self.model.parameters(), lr=lr, momentum=0.9)
+            self.optimizer = torch.optim.SGD(self.model.parameters(), lr=lr, momentum=0.9)
         else:
             raise ValueError(f"optimizer {optim} not implemented.")
 
+        if hasattr(self, 'disc'):
+            self.optim_disc = torch.optim.Adam(self.disc.parameters(), lr=1.e-3)
+
         if lr_decay is not None:
-            scheduler = ExponentialLR(optimizer, gamma=lr_decay)
+            scheduler = ExponentialLR(self.optimizer, gamma=lr_decay)
         else:
             scheduler = None
 
@@ -201,7 +243,7 @@ class Trainer:
                 lr = scheduler.get_last_lr()[0]
 
             print(f"Epoch {t+1} -- Learning rate: {lr:5.3e}\n----------------------------------")
-            train_loss = self.train_batch(optimizer)
+            train_loss = self.train_batch()
             train_loss_history.append([t, *train_loss])
 
             if (t+1)%val_freq==0:
@@ -224,5 +266,11 @@ class Trainer:
 
     def save_checkpoint(self, t, savepath):
         checkpoint_path = f"{savepath}checkpoint-{t:05d}.pth"
-        torch.save(self.model.state_dict(), checkpoint_path) 
+
+        if hasattr(self, 'disc'):
+            torch.save({'model': self.model.state_dict(), 'discriminator': self.disc.state_dict()}, 
+                   checkpoint_path) 
+        else:
+            torch.save({'model': self.model.state_dict()}, checkpoint_path) 
+
         print(f"Saved PyTorch Model State to {checkpoint_path}")
